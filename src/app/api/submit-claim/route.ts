@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { Resend } from "resend";
 import { checkEligibility } from "@/lib/eligibility";
-import { getAirlineFromFlightNumber } from "@/data/airlines";
+import { airlineNames, getAirlineFromFlightNumber } from "@/data/airlines";
+import { getAirportByCode } from "@/data/airports";
 
 const VALID_EVENT_TYPES = ["delayed", "cancelled", "denied", "unsure"];
 const VALID_DELAY_DURATIONS = ["less-than-3", "3-or-more", "unsure", ""];
@@ -102,7 +102,40 @@ function runEligibilityCheck(data: { flight_number: string; flight_date: string;
   return {
     eligible: result.eligible && !result.uncertain,
     estimatedCompensation: result.estimatedCompensation?.zar ?? null,
+    reasons: result.reasons,
+    airlineCode,
   };
+}
+
+function formatAirport(code: string): string {
+  const ap = getAirportByCode(code);
+  if (!ap) return code;
+  return `${code} — ${ap.city} (${ap.name})`;
+}
+
+function formatAirline(code: string | null): string {
+  if (!code) return "Unknown (could not parse from flight number)";
+  const name = airlineNames[code];
+  return name ? `${name} (${code})` : `Unknown carrier (code: ${code})`;
+}
+
+function formatEvent(eventType: string, delayDuration: string | null): string {
+  const eventLabels: Record<string, string> = {
+    delayed: "Delayed",
+    cancelled: "Cancelled",
+    denied: "Denied boarding",
+    unsure: "Unsure what happened",
+  };
+  const delayLabels: Record<string, string> = {
+    "less-than-3": "less than 3 hours",
+    "3-or-more": "3 hours or more",
+    unsure: "duration unknown",
+  };
+  const base = eventLabels[eventType] ?? eventType;
+  if (eventType === "delayed" && delayDuration && delayLabels[delayDuration]) {
+    return `${base} — ${delayLabels[delayDuration]}`;
+  }
+  return base;
 }
 
 function generateClaimRef(): string {
@@ -123,94 +156,104 @@ export async function POST(request: NextRequest) {
     const eligibility = runEligibilityCheck(data);
     const claimRef = generateClaimRef();
 
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-    if (!supabaseUrl || !supabaseKey) {
-      console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+    const resendApiKey = process.env.RESEND_API_KEY;
+    if (!resendApiKey) {
+      console.error("Missing RESEND_API_KEY");
       return NextResponse.json({ error: "Server configuration error" }, { status: 500 });
     }
 
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    const resend = new Resend(resendApiKey);
+    const estimatedAmount = eligibility.estimatedCompensation
+      ? `R${eligibility.estimatedCompensation.toLocaleString()}`
+      : "To be determined";
+    const submittedAt = new Date().toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg" });
+    const airlineLabel = formatAirline(eligibility.airlineCode);
+    const departureLabel = formatAirport(data.departure_airport);
+    const arrivalLabel = formatAirport(data.arrival_airport);
+    const eventLabel = formatEvent(data.event_type, data.delay_duration);
+    const reasonsHtml = eligibility.reasons.length
+      ? `<ul style="margin:4px 0;padding-left:18px;">${eligibility.reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>`
+      : "—";
+    const utm = [data.utm_source, data.utm_medium, data.utm_campaign].filter(Boolean).join(" / ") || "Direct";
+    const row = (label: string, value: string) =>
+      `<tr><td style="padding:6px 16px 6px 0;color:#666;vertical-align:top;white-space:nowrap;">${label}</td><td style="padding:6px 0;">${value}</td></tr>`;
 
-    const { error } = await supabase.from("claims").insert({
-      ...data,
-      documents: [],
-      eligible: eligibility.eligible,
-      estimated_compensation: eligibility.estimatedCompensation,
-      claim_reference: claimRef,
-      status: "submitted",
-    });
+    await Promise.all([
+      resend.emails.send({
+        from: "Refund My Flight <notifications@refundmyflight.co.za>",
+        to: ["daron@refundmyflight.co.za", "daronbiddle21@gmail.com"],
+        replyTo: data.email,
+        subject: `New Claim ${claimRef} — ${escapeHtml(data.full_name)} — ${escapeHtml(data.flight_number)} ${escapeHtml(data.flight_date)}`,
+        html: `
+          <div style="font-family:sans-serif;max-width:680px;color:#1B2A4A;">
+            <h2 style="margin:0 0 4px;">New Claim Submitted</h2>
+            <p style="margin:0 0 20px;color:#666;font-size:13px;">${submittedAt} (SAST)</p>
 
-    if (error) {
-      console.error("DB insert error:", error);
-      return NextResponse.json({ error: "Failed to submit claim" }, { status: 500 });
-    }
-
-    // Send emails
-    try {
-      const resendApiKey = process.env.RESEND_API_KEY;
-      if (resendApiKey) {
-        const resend = new Resend(resendApiKey);
-        const estimatedAmount = eligibility.estimatedCompensation
-          ? `R${eligibility.estimatedCompensation.toLocaleString()}`
-          : "To be determined";
-
-        await Promise.all([
-          resend.emails.send({
-          from: "Refund My Flight <notifications@refundmyflight.co.za>",
-          to: ["daron@refundmyflight.co.za", "daronbiddle21@gmail.com"],
-          subject: `New Claim Submitted: ${claimRef}`,
-          html: `
-            <h2>New Claim Submitted</h2>
-            <table style="border-collapse:collapse;font-family:sans-serif;">
-              <tr><td style="padding:4px 12px 4px 0;color:#666;">Reference</td><td style="padding:4px 0;font-weight:bold;">${claimRef}</td></tr>
-              <tr><td style="padding:4px 12px 4px 0;color:#666;">Name</td><td style="padding:4px 0;">${escapeHtml(data.full_name)}</td></tr>
-              <tr><td style="padding:4px 12px 4px 0;color:#666;">Email</td><td style="padding:4px 0;">${escapeHtml(data.email)}</td></tr>
-              <tr><td style="padding:4px 12px 4px 0;color:#666;">Phone</td><td style="padding:4px 0;">${escapeHtml(data.phone)}</td></tr>
-              <tr><td style="padding:4px 12px 4px 0;color:#666;">Flight</td><td style="padding:4px 0;">${escapeHtml(data.flight_number)} on ${escapeHtml(data.flight_date)}</td></tr>
-              <tr><td style="padding:4px 12px 4px 0;color:#666;">Route</td><td style="padding:4px 0;">${escapeHtml(data.departure_airport)} → ${escapeHtml(data.arrival_airport)}</td></tr>
-              <tr><td style="padding:4px 12px 4px 0;color:#666;">Event</td><td style="padding:4px 0;">${data.event_type}</td></tr>
-              <tr><td style="padding:4px 12px 4px 0;color:#666;">Passengers</td><td style="padding:4px 0;">${data.passenger_count}</td></tr>
-              <tr><td style="padding:4px 12px 4px 0;color:#666;">Eligible</td><td style="padding:4px 0;">${eligibility.eligible ? "Yes" : "No"}</td></tr>
+            <h3 style="margin:20px 0 6px;font-size:14px;color:#4A90D9;text-transform:uppercase;letter-spacing:0.5px;">Claim</h3>
+            <table style="border-collapse:collapse;font-size:14px;">
+              ${row("Reference", `<strong>${claimRef}</strong>`)}
+              ${row("Eligibility", eligibility.eligible ? "<strong style=\"color:#1a8a4a;\">Eligible</strong>" : "Not eligible / uncertain")}
+              ${row("Est. compensation", `<strong>${estimatedAmount}</strong> (per passenger)`)}
+              ${row("Passengers", String(data.passenger_count))}
+              ${row("Reasons", reasonsHtml)}
             </table>
-          `,
-        }),
-          resend.emails.send({
-          from: "Refund My Flight <notifications@refundmyflight.co.za>",
-          to: [data.email],
-          subject: `Claim Received — ${claimRef}`,
-          html: `
-            <div style="font-family:sans-serif;max-width:600px;margin:0 auto;color:#1B2A4A;">
-              <h1 style="color:#1B2A4A;font-size:24px;">Thanks, ${escapeHtml(data.full_name)}!</h1>
-              <p style="font-size:16px;line-height:1.6;">We've received your flight compensation claim and our team is on it.</p>
-              <div style="background:#F5F7FA;border-radius:8px;padding:20px;margin:24px 0;">
-                <p style="margin:0 0 4px;color:#666;font-size:13px;">Your claim reference</p>
-                <p style="margin:0;font-size:22px;font-weight:bold;color:#1B2A4A;">${claimRef}</p>
-              </div>
-              <table style="border-collapse:collapse;width:100%;font-size:14px;">
-                <tr><td style="padding:8px 0;color:#666;border-bottom:1px solid #eee;">Flight</td><td style="padding:8px 0;text-align:right;border-bottom:1px solid #eee;font-weight:500;">${escapeHtml(data.flight_number)} — ${escapeHtml(data.flight_date)}</td></tr>
-                <tr><td style="padding:8px 0;color:#666;border-bottom:1px solid #eee;">Route</td><td style="padding:8px 0;text-align:right;border-bottom:1px solid #eee;font-weight:500;">${escapeHtml(data.departure_airport)} → ${escapeHtml(data.arrival_airport)}</td></tr>
-                <tr><td style="padding:8px 0;color:#666;border-bottom:1px solid #eee;">Estimated compensation</td><td style="padding:8px 0;text-align:right;border-bottom:1px solid #eee;font-weight:bold;color:#4A90D9;">${estimatedAmount}</td></tr>
-              </table>
-              <h2 style="font-size:18px;margin:28px 0 12px;color:#1B2A4A;">What happens next?</h2>
-              <ol style="font-size:14px;line-height:1.8;padding-left:20px;color:#333;">
-                <li>We review your claim details (1–2 business days)</li>
-                <li>We contact the airline on your behalf</li>
-                <li>Once resolved, you receive your compensation</li>
-              </ol>
-              <p style="font-size:14px;line-height:1.6;color:#333;">No win, no fee — you only pay 25% + VAT if we succeed.</p>
-              <p style="font-size:14px;color:#666;margin-top:28px;">Questions? Reply to this email or contact us at <a href="mailto:daron@refundmyflight.co.za" style="color:#4A90D9;">daron@refundmyflight.co.za</a></p>
-              <hr style="border:none;border-top:1px solid #eee;margin:28px 0;" />
-              <p style="font-size:12px;color:#999;">Refund My Flight · EU 261/2004 Compensation Specialists</p>
+
+            <h3 style="margin:24px 0 6px;font-size:14px;color:#4A90D9;text-transform:uppercase;letter-spacing:0.5px;">Customer</h3>
+            <table style="border-collapse:collapse;font-size:14px;">
+              ${row("Name", escapeHtml(data.full_name))}
+              ${row("Email", `<a href="mailto:${escapeHtml(data.email)}">${escapeHtml(data.email)}</a>`)}
+              ${row("Phone", `<a href="tel:${escapeHtml(data.phone)}">${escapeHtml(data.phone)}</a>`)}
+            </table>
+
+            <h3 style="margin:24px 0 6px;font-size:14px;color:#4A90D9;text-transform:uppercase;letter-spacing:0.5px;">Flight</h3>
+            <table style="border-collapse:collapse;font-size:14px;">
+              ${row("Airline", escapeHtml(airlineLabel))}
+              ${row("Flight number", `<strong>${escapeHtml(data.flight_number)}</strong>`)}
+              ${row("Flight date", escapeHtml(data.flight_date))}
+              ${row("Departure", escapeHtml(departureLabel))}
+              ${row("Arrival", escapeHtml(arrivalLabel))}
+              ${row("Event", `<strong>${escapeHtml(eventLabel)}</strong>`)}
+              ${row("Booking ref", data.booking_reference ? `<strong>${escapeHtml(data.booking_reference)}</strong>` : "<em style=\"color:#c00;\">Not provided — request from customer before contacting airline</em>")}
+            </table>
+
+            <h3 style="margin:24px 0 6px;font-size:14px;color:#4A90D9;text-transform:uppercase;letter-spacing:0.5px;">Attribution</h3>
+            <table style="border-collapse:collapse;font-size:14px;">
+              ${row("Source", escapeHtml(utm))}
+            </table>
+          </div>
+        `,
+      }),
+      resend.emails.send({
+        from: "Refund My Flight <notifications@refundmyflight.co.za>",
+        to: [data.email],
+        subject: `Claim Received — ${claimRef}`,
+        html: `
+          <div style="font-family:sans-serif;max-width:600px;margin:0 auto;color:#1B2A4A;">
+            <h1 style="color:#1B2A4A;font-size:24px;">Thanks, ${escapeHtml(data.full_name)}!</h1>
+            <p style="font-size:16px;line-height:1.6;">We've received your flight compensation claim and our team is on it.</p>
+            <div style="background:#F5F7FA;border-radius:8px;padding:20px;margin:24px 0;">
+              <p style="margin:0 0 4px;color:#666;font-size:13px;">Your claim reference</p>
+              <p style="margin:0;font-size:22px;font-weight:bold;color:#1B2A4A;">${claimRef}</p>
             </div>
-          `,
-        }),
-        ]);
-      }
-    } catch (emailErr) {
-      console.error("Email send error:", emailErr);
-    }
+            <table style="border-collapse:collapse;width:100%;font-size:14px;">
+              <tr><td style="padding:8px 0;color:#666;border-bottom:1px solid #eee;">Flight</td><td style="padding:8px 0;text-align:right;border-bottom:1px solid #eee;font-weight:500;">${escapeHtml(data.flight_number)} — ${escapeHtml(data.flight_date)}</td></tr>
+              <tr><td style="padding:8px 0;color:#666;border-bottom:1px solid #eee;">Route</td><td style="padding:8px 0;text-align:right;border-bottom:1px solid #eee;font-weight:500;">${escapeHtml(data.departure_airport)} → ${escapeHtml(data.arrival_airport)}</td></tr>
+              <tr><td style="padding:8px 0;color:#666;border-bottom:1px solid #eee;">Estimated compensation</td><td style="padding:8px 0;text-align:right;border-bottom:1px solid #eee;font-weight:bold;color:#4A90D9;">${estimatedAmount}</td></tr>
+            </table>
+            <h2 style="font-size:18px;margin:28px 0 12px;color:#1B2A4A;">What happens next?</h2>
+            <ol style="font-size:14px;line-height:1.8;padding-left:20px;color:#333;">
+              <li>We review your claim details (1–2 business days)</li>
+              <li>We contact the airline on your behalf</li>
+              <li>Once resolved, you receive your compensation</li>
+            </ol>
+            <p style="font-size:14px;line-height:1.6;color:#333;">No win, no fee — you only pay 25% + VAT if we succeed.</p>
+            <p style="font-size:14px;color:#666;margin-top:28px;">Questions? Reply to this email or contact us at <a href="mailto:daron@refundmyflight.co.za" style="color:#4A90D9;">daron@refundmyflight.co.za</a></p>
+            <hr style="border:none;border-top:1px solid #eee;margin:28px 0;" />
+            <p style="font-size:12px;color:#999;">Refund My Flight · EU 261/2004 Compensation Specialists</p>
+          </div>
+        `,
+      }),
+    ]);
 
     return NextResponse.json({ claim_reference: claimRef });
   } catch (err) {
