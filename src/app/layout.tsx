@@ -29,9 +29,6 @@ export const metadata: Metadata = {
   alternates: {
     canonical: "https://refundmyflight.co.za",
   },
-  icons: {
-    icon: "https://storage.googleapis.com/gpt-engineer-file-uploads/FZdVfviAPVdCOBGKfMTnR3H4jlp1/uploads/1770648862175-Screenshot_2026-02-09_at_15.38.17.png",
-  },
 };
 
 export default function RootLayout({

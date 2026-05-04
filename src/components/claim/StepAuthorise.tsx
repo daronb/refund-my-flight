@@ -11,6 +11,7 @@ import type { ClaimData } from "@/app/check/ClaimWizard";
 import { allAirports } from "@/data/airports";
 import { airlineNames, getAirlineFromFlightNumber } from "@/data/airlines";
 import { getUtmParams } from "@/lib/tracking";
+import { trackCompleteRegistration } from "@/lib/metaPixel";
 
 interface Props {
   data: ClaimData;
@@ -83,6 +84,7 @@ export default function StepAuthorise({ data, updateData, onSubmitted }: Props) 
         return;
       }
 
+      trackCompleteRegistration();
       onSubmitted(claimRef);
     } catch {
       toast({ title: "Something went wrong", description: "Please try again.", variant: "destructive" });
