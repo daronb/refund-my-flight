@@ -14,22 +14,20 @@ export default function SocialProof() {
   return (
     <section className="bg-muted py-16 md:py-20">
       <div className="container mx-auto px-4">
-        <div className="mx-auto mb-14 flex max-w-5xl gap-6 overflow-x-auto pb-4 snap-x snap-mandatory">
+        <div className="mx-auto mb-14 grid max-w-5xl gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
           {reviews.map((r) => (
-            <Card key={r.id} className="h-full border-0 shadow-sm min-w-[300px] snap-start flex flex-col">
-              <CardContent className="p-6 flex flex-col flex-1">
-                <div className="mb-3">
-                  <div className="flex gap-0.5">
-                    {[...Array(5)].map((_, j) => (
-                      <Star
-                        key={j}
-                        className={`h-4 w-4 ${j < r.rating ? "fill-accent text-accent" : "text-muted-foreground/30"}`}
-                      />
-                    ))}
-                  </div>
+            <Card key={r.id} className="flex flex-col border-0 shadow-sm">
+              <CardContent className="flex flex-1 flex-col p-6">
+                <div className="mb-3 flex gap-0.5">
+                  {[...Array(5)].map((_, j) => (
+                    <Star
+                      key={j}
+                      className={`h-4 w-4 ${j < r.rating ? "fill-accent text-accent" : "text-muted-foreground/30"}`}
+                    />
+                  ))}
                 </div>
-                <p className="mb-4 flex-1 text-foreground">&ldquo;{r.review}&rdquo;</p>
-                <p className="font-bold text-foreground">{r.name}</p>
+                <p className="mb-4 text-foreground">&ldquo;{r.review}&rdquo;</p>
+                <p className="mt-auto font-bold text-foreground">{r.name}</p>
               </CardContent>
             </Card>
           ))}
