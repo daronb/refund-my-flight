@@ -3,6 +3,7 @@ import { Resend } from "resend";
 import { checkEligibility } from "@/lib/eligibility";
 import { airlineNames, getAirlineFromFlightNumber } from "@/data/airlines";
 import { getAirportByCode } from "@/data/airports";
+import { getDb } from "@/lib/db";
 
 const VALID_EVENT_TYPES = ["delayed", "cancelled", "denied", "unsure"];
 const VALID_DELAY_DURATIONS = ["less-than-3", "3-or-more", "unsure", ""];
@@ -144,6 +145,198 @@ function generateClaimRef(): string {
   return `RMF-${year}-${rand}`;
 }
 
+type ValidatedData = Extract<ReturnType<typeof validatePayload>, { valid: true }>["data"];
+type EligibilityResult = ReturnType<typeof runEligibilityCheck>;
+
+async function persistSubmission(claimRef: string, data: ValidatedData, eligibility: EligibilityResult) {
+  const sql = getDb();
+  if (!sql) {
+    console.warn("[submit-claim] DATABASE_URL not set — submission not persisted", { claimRef });
+    return;
+  }
+  try {
+    await sql`
+      INSERT INTO claim_submissions (
+        claim_reference,
+        full_name, email, phone,
+        flight_number, flight_date, departure_airport, arrival_airport,
+        event_type, delay_duration, booking_reference, passenger_count,
+        utm_source, utm_medium, utm_campaign,
+        eligible, estimated_compensation, airline_code, eligibility_reasons,
+        raw_payload
+      ) VALUES (
+        ${claimRef},
+        ${data.full_name}, ${data.email}, ${data.phone},
+        ${data.flight_number}, ${data.flight_date}, ${data.departure_airport}, ${data.arrival_airport},
+        ${data.event_type}, ${data.delay_duration}, ${data.booking_reference}, ${data.passenger_count},
+        ${data.utm_source}, ${data.utm_medium}, ${data.utm_campaign},
+        ${eligibility.eligible}, ${eligibility.estimatedCompensation}, ${eligibility.airlineCode},
+        ${JSON.stringify(eligibility.reasons)}::jsonb,
+        ${JSON.stringify(data)}::jsonb
+      )
+    `;
+  } catch (err) {
+    console.error("[submit-claim] DB insert failed", { claimRef, err });
+  }
+}
+
+async function markAdminSent(claimRef: string, emailId: string | null) {
+  const sql = getDb();
+  if (!sql) return;
+  try {
+    await sql`
+      UPDATE claim_submissions
+      SET admin_email_status = 'sent',
+          admin_email_id = ${emailId},
+          updated_at = now()
+      WHERE claim_reference = ${claimRef}
+    `;
+  } catch (err) {
+    console.error("[submit-claim] markAdminSent failed", { claimRef, err });
+  }
+}
+
+async function markAdminFailed(claimRef: string, error: string) {
+  const sql = getDb();
+  if (!sql) return;
+  try {
+    await sql`
+      UPDATE claim_submissions
+      SET admin_email_status = 'failed',
+          admin_email_error = ${error},
+          updated_at = now()
+      WHERE claim_reference = ${claimRef}
+    `;
+  } catch (err) {
+    console.error("[submit-claim] markAdminFailed failed", { claimRef, err });
+  }
+}
+
+async function markCustomerSent(claimRef: string, emailId: string | null) {
+  const sql = getDb();
+  if (!sql) return;
+  try {
+    await sql`
+      UPDATE claim_submissions
+      SET customer_email_status = 'sent',
+          customer_email_id = ${emailId},
+          updated_at = now()
+      WHERE claim_reference = ${claimRef}
+    `;
+  } catch (err) {
+    console.error("[submit-claim] markCustomerSent failed", { claimRef, err });
+  }
+}
+
+async function markCustomerFailed(claimRef: string, error: string) {
+  const sql = getDb();
+  if (!sql) return;
+  try {
+    await sql`
+      UPDATE claim_submissions
+      SET customer_email_status = 'failed',
+          customer_email_error = ${error},
+          updated_at = now()
+      WHERE claim_reference = ${claimRef}
+    `;
+  } catch (err) {
+    console.error("[submit-claim] markCustomerFailed failed", { claimRef, err });
+  }
+}
+
+function buildAdminHtml(claimRef: string, data: ValidatedData, eligibility: EligibilityResult): { subject: string; html: string } {
+  const estimatedAmount = eligibility.estimatedCompensation
+    ? `R${eligibility.estimatedCompensation.toLocaleString()}`
+    : "To be determined";
+  const submittedAt = new Date().toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg" });
+  const airlineLabel = formatAirline(eligibility.airlineCode);
+  const departureLabel = formatAirport(data.departure_airport);
+  const arrivalLabel = formatAirport(data.arrival_airport);
+  const eventLabel = formatEvent(data.event_type, data.delay_duration);
+  const reasonsHtml = eligibility.reasons.length
+    ? `<ul style="margin:4px 0;padding-left:18px;">${eligibility.reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>`
+    : "—";
+  const utm = [data.utm_source, data.utm_medium, data.utm_campaign].filter(Boolean).join(" / ") || "Direct";
+  const row = (label: string, value: string) =>
+    `<tr><td style="padding:6px 16px 6px 0;color:#666;vertical-align:top;white-space:nowrap;">${label}</td><td style="padding:6px 0;">${value}</td></tr>`;
+
+  return {
+    subject: `New Claim ${claimRef} — ${escapeHtml(data.full_name)} — ${escapeHtml(data.flight_number)} ${escapeHtml(data.flight_date)}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:680px;color:#1B2A4A;">
+        <h2 style="margin:0 0 4px;">New Claim Submitted</h2>
+        <p style="margin:0 0 20px;color:#666;font-size:13px;">${submittedAt} (SAST)</p>
+
+        <h3 style="margin:20px 0 6px;font-size:14px;color:#4A90D9;text-transform:uppercase;letter-spacing:0.5px;">Claim</h3>
+        <table style="border-collapse:collapse;font-size:14px;">
+          ${row("Reference", `<strong>${claimRef}</strong>`)}
+          ${row("Eligibility", eligibility.eligible ? "<strong style=\"color:#1a8a4a;\">Eligible</strong>" : "Not eligible / uncertain")}
+          ${row("Est. compensation", `<strong>${estimatedAmount}</strong> (per passenger)`)}
+          ${row("Passengers", String(data.passenger_count))}
+          ${row("Reasons", reasonsHtml)}
+        </table>
+
+        <h3 style="margin:24px 0 6px;font-size:14px;color:#4A90D9;text-transform:uppercase;letter-spacing:0.5px;">Customer</h3>
+        <table style="border-collapse:collapse;font-size:14px;">
+          ${row("Name", escapeHtml(data.full_name))}
+          ${row("Email", `<a href="mailto:${escapeHtml(data.email)}">${escapeHtml(data.email)}</a>`)}
+          ${row("Phone", `<a href="tel:${escapeHtml(data.phone)}">${escapeHtml(data.phone)}</a>`)}
+        </table>
+
+        <h3 style="margin:24px 0 6px;font-size:14px;color:#4A90D9;text-transform:uppercase;letter-spacing:0.5px;">Flight</h3>
+        <table style="border-collapse:collapse;font-size:14px;">
+          ${row("Airline", escapeHtml(airlineLabel))}
+          ${row("Flight number", `<strong>${escapeHtml(data.flight_number)}</strong>`)}
+          ${row("Flight date", escapeHtml(data.flight_date))}
+          ${row("Departure", escapeHtml(departureLabel))}
+          ${row("Arrival", escapeHtml(arrivalLabel))}
+          ${row("Event", `<strong>${escapeHtml(eventLabel)}</strong>`)}
+          ${row("Booking ref", data.booking_reference ? `<strong>${escapeHtml(data.booking_reference)}</strong>` : "<em style=\"color:#c00;\">Not provided — request from customer before contacting airline</em>")}
+        </table>
+
+        <h3 style="margin:24px 0 6px;font-size:14px;color:#4A90D9;text-transform:uppercase;letter-spacing:0.5px;">Attribution</h3>
+        <table style="border-collapse:collapse;font-size:14px;">
+          ${row("Source", escapeHtml(utm))}
+        </table>
+      </div>
+    `,
+  };
+}
+
+function buildCustomerHtml(claimRef: string, data: ValidatedData, eligibility: EligibilityResult): { subject: string; html: string } {
+  const estimatedAmount = eligibility.estimatedCompensation
+    ? `R${eligibility.estimatedCompensation.toLocaleString()}`
+    : "To be determined";
+  return {
+    subject: `Claim Received — ${claimRef}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:600px;margin:0 auto;color:#1B2A4A;">
+        <h1 style="color:#1B2A4A;font-size:24px;">Thanks, ${escapeHtml(data.full_name)}!</h1>
+        <p style="font-size:16px;line-height:1.6;">We've received your flight compensation claim and our team is on it.</p>
+        <div style="background:#F5F7FA;border-radius:8px;padding:20px;margin:24px 0;">
+          <p style="margin:0 0 4px;color:#666;font-size:13px;">Your claim reference</p>
+          <p style="margin:0;font-size:22px;font-weight:bold;color:#1B2A4A;">${claimRef}</p>
+        </div>
+        <table style="border-collapse:collapse;width:100%;font-size:14px;">
+          <tr><td style="padding:8px 0;color:#666;border-bottom:1px solid #eee;">Flight</td><td style="padding:8px 0;text-align:right;border-bottom:1px solid #eee;font-weight:500;">${escapeHtml(data.flight_number)} — ${escapeHtml(data.flight_date)}</td></tr>
+          <tr><td style="padding:8px 0;color:#666;border-bottom:1px solid #eee;">Route</td><td style="padding:8px 0;text-align:right;border-bottom:1px solid #eee;font-weight:500;">${escapeHtml(data.departure_airport)} → ${escapeHtml(data.arrival_airport)}</td></tr>
+          <tr><td style="padding:8px 0;color:#666;border-bottom:1px solid #eee;">Estimated compensation</td><td style="padding:8px 0;text-align:right;border-bottom:1px solid #eee;font-weight:bold;color:#4A90D9;">${estimatedAmount}</td></tr>
+        </table>
+        <h2 style="font-size:18px;margin:28px 0 12px;color:#1B2A4A;">What happens next?</h2>
+        <ol style="font-size:14px;line-height:1.8;padding-left:20px;color:#333;">
+          <li>We review your claim details (1–2 business days)</li>
+          <li>We contact the airline on your behalf</li>
+          <li>Once resolved, you receive your compensation</li>
+        </ol>
+        <p style="font-size:14px;line-height:1.6;color:#333;">No win, no fee — you only pay 25% + VAT if we succeed.</p>
+        <p style="font-size:14px;color:#666;margin-top:28px;">Questions? Reply to this email or contact us at <a href="mailto:daron@refundmyflight.co.za" style="color:#4A90D9;">daron@refundmyflight.co.za</a></p>
+        <hr style="border:none;border-top:1px solid #eee;margin:28px 0;" />
+        <p style="font-size:12px;color:#999;">Refund My Flight · EU 261/2004 Compensation Specialists</p>
+      </div>
+    `,
+  };
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -158,106 +351,70 @@ export async function POST(request: NextRequest) {
 
     const resendApiKey = process.env.RESEND_API_KEY;
     if (!resendApiKey) {
-      console.error("Missing RESEND_API_KEY");
+      console.error("[submit-claim] Missing RESEND_API_KEY");
       return NextResponse.json({ error: "Server configuration error" }, { status: 500 });
     }
 
-    const resend = new Resend(resendApiKey);
-    const estimatedAmount = eligibility.estimatedCompensation
-      ? `R${eligibility.estimatedCompensation.toLocaleString()}`
-      : "To be determined";
-    const submittedAt = new Date().toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg" });
-    const airlineLabel = formatAirline(eligibility.airlineCode);
-    const departureLabel = formatAirport(data.departure_airport);
-    const arrivalLabel = formatAirport(data.arrival_airport);
-    const eventLabel = formatEvent(data.event_type, data.delay_duration);
-    const reasonsHtml = eligibility.reasons.length
-      ? `<ul style="margin:4px 0;padding-left:18px;">${eligibility.reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>`
-      : "—";
-    const utm = [data.utm_source, data.utm_medium, data.utm_campaign].filter(Boolean).join(" / ") || "Direct";
-    const row = (label: string, value: string) =>
-      `<tr><td style="padding:6px 16px 6px 0;color:#666;vertical-align:top;white-space:nowrap;">${label}</td><td style="padding:6px 0;">${value}</td></tr>`;
+    // 1. Persist BEFORE attempting any email so we never lose a submission.
+    await persistSubmission(claimRef, data, eligibility);
 
-    await Promise.all([
-      resend.emails.send({
+    const resend = new Resend(resendApiKey);
+
+    // 2. Admin notification — must succeed. If it fails, fail the request so the
+    //    customer retries (and so we don't navigate them to /thank-you on a lost claim).
+    const adminEmail = buildAdminHtml(claimRef, data, eligibility);
+    let adminResp;
+    try {
+      adminResp = await resend.emails.send({
         from: "Refund My Flight <notifications@refundmyflight.co.za>",
         to: ["daron@refundmyflight.co.za", "daronbiddle21@gmail.com"],
         replyTo: data.email,
-        subject: `New Claim ${claimRef} — ${escapeHtml(data.full_name)} — ${escapeHtml(data.flight_number)} ${escapeHtml(data.flight_date)}`,
-        html: `
-          <div style="font-family:sans-serif;max-width:680px;color:#1B2A4A;">
-            <h2 style="margin:0 0 4px;">New Claim Submitted</h2>
-            <p style="margin:0 0 20px;color:#666;font-size:13px;">${submittedAt} (SAST)</p>
+        subject: adminEmail.subject,
+        html: adminEmail.html,
+      });
+    } catch (err) {
+      console.error("[submit-claim] Admin email threw", { claimRef, err });
+      await markAdminFailed(claimRef, String(err));
+      return NextResponse.json(
+        { error: "We couldn't send your claim through right now. Please try again." },
+        { status: 502 },
+      );
+    }
 
-            <h3 style="margin:20px 0 6px;font-size:14px;color:#4A90D9;text-transform:uppercase;letter-spacing:0.5px;">Claim</h3>
-            <table style="border-collapse:collapse;font-size:14px;">
-              ${row("Reference", `<strong>${claimRef}</strong>`)}
-              ${row("Eligibility", eligibility.eligible ? "<strong style=\"color:#1a8a4a;\">Eligible</strong>" : "Not eligible / uncertain")}
-              ${row("Est. compensation", `<strong>${estimatedAmount}</strong> (per passenger)`)}
-              ${row("Passengers", String(data.passenger_count))}
-              ${row("Reasons", reasonsHtml)}
-            </table>
+    if (adminResp.error) {
+      console.error("[submit-claim] Admin email error from Resend", { claimRef, error: adminResp.error });
+      await markAdminFailed(claimRef, JSON.stringify(adminResp.error));
+      return NextResponse.json(
+        { error: "We couldn't send your claim through right now. Please try again." },
+        { status: 502 },
+      );
+    }
 
-            <h3 style="margin:24px 0 6px;font-size:14px;color:#4A90D9;text-transform:uppercase;letter-spacing:0.5px;">Customer</h3>
-            <table style="border-collapse:collapse;font-size:14px;">
-              ${row("Name", escapeHtml(data.full_name))}
-              ${row("Email", `<a href="mailto:${escapeHtml(data.email)}">${escapeHtml(data.email)}</a>`)}
-              ${row("Phone", `<a href="tel:${escapeHtml(data.phone)}">${escapeHtml(data.phone)}</a>`)}
-            </table>
+    await markAdminSent(claimRef, adminResp.data?.id ?? null);
 
-            <h3 style="margin:24px 0 6px;font-size:14px;color:#4A90D9;text-transform:uppercase;letter-spacing:0.5px;">Flight</h3>
-            <table style="border-collapse:collapse;font-size:14px;">
-              ${row("Airline", escapeHtml(airlineLabel))}
-              ${row("Flight number", `<strong>${escapeHtml(data.flight_number)}</strong>`)}
-              ${row("Flight date", escapeHtml(data.flight_date))}
-              ${row("Departure", escapeHtml(departureLabel))}
-              ${row("Arrival", escapeHtml(arrivalLabel))}
-              ${row("Event", `<strong>${escapeHtml(eventLabel)}</strong>`)}
-              ${row("Booking ref", data.booking_reference ? `<strong>${escapeHtml(data.booking_reference)}</strong>` : "<em style=\"color:#c00;\">Not provided — request from customer before contacting airline</em>")}
-            </table>
-
-            <h3 style="margin:24px 0 6px;font-size:14px;color:#4A90D9;text-transform:uppercase;letter-spacing:0.5px;">Attribution</h3>
-            <table style="border-collapse:collapse;font-size:14px;">
-              ${row("Source", escapeHtml(utm))}
-            </table>
-          </div>
-        `,
-      }),
-      resend.emails.send({
+    // 3. Customer confirmation — best effort. A bounce here must NOT block the success response.
+    const customerEmail = buildCustomerHtml(claimRef, data, eligibility);
+    try {
+      const customerResp = await resend.emails.send({
         from: "Refund My Flight <notifications@refundmyflight.co.za>",
         to: [data.email],
-        subject: `Claim Received — ${claimRef}`,
-        html: `
-          <div style="font-family:sans-serif;max-width:600px;margin:0 auto;color:#1B2A4A;">
-            <h1 style="color:#1B2A4A;font-size:24px;">Thanks, ${escapeHtml(data.full_name)}!</h1>
-            <p style="font-size:16px;line-height:1.6;">We've received your flight compensation claim and our team is on it.</p>
-            <div style="background:#F5F7FA;border-radius:8px;padding:20px;margin:24px 0;">
-              <p style="margin:0 0 4px;color:#666;font-size:13px;">Your claim reference</p>
-              <p style="margin:0;font-size:22px;font-weight:bold;color:#1B2A4A;">${claimRef}</p>
-            </div>
-            <table style="border-collapse:collapse;width:100%;font-size:14px;">
-              <tr><td style="padding:8px 0;color:#666;border-bottom:1px solid #eee;">Flight</td><td style="padding:8px 0;text-align:right;border-bottom:1px solid #eee;font-weight:500;">${escapeHtml(data.flight_number)} — ${escapeHtml(data.flight_date)}</td></tr>
-              <tr><td style="padding:8px 0;color:#666;border-bottom:1px solid #eee;">Route</td><td style="padding:8px 0;text-align:right;border-bottom:1px solid #eee;font-weight:500;">${escapeHtml(data.departure_airport)} → ${escapeHtml(data.arrival_airport)}</td></tr>
-              <tr><td style="padding:8px 0;color:#666;border-bottom:1px solid #eee;">Estimated compensation</td><td style="padding:8px 0;text-align:right;border-bottom:1px solid #eee;font-weight:bold;color:#4A90D9;">${estimatedAmount}</td></tr>
-            </table>
-            <h2 style="font-size:18px;margin:28px 0 12px;color:#1B2A4A;">What happens next?</h2>
-            <ol style="font-size:14px;line-height:1.8;padding-left:20px;color:#333;">
-              <li>We review your claim details (1–2 business days)</li>
-              <li>We contact the airline on your behalf</li>
-              <li>Once resolved, you receive your compensation</li>
-            </ol>
-            <p style="font-size:14px;line-height:1.6;color:#333;">No win, no fee — you only pay 25% + VAT if we succeed.</p>
-            <p style="font-size:14px;color:#666;margin-top:28px;">Questions? Reply to this email or contact us at <a href="mailto:daron@refundmyflight.co.za" style="color:#4A90D9;">daron@refundmyflight.co.za</a></p>
-            <hr style="border:none;border-top:1px solid #eee;margin:28px 0;" />
-            <p style="font-size:12px;color:#999;">Refund My Flight · EU 261/2004 Compensation Specialists</p>
-          </div>
-        `,
-      }),
-    ]);
+        subject: customerEmail.subject,
+        html: customerEmail.html,
+      });
+      if (customerResp.error) {
+        console.error("[submit-claim] Customer email error from Resend", { claimRef, error: customerResp.error });
+        await markCustomerFailed(claimRef, JSON.stringify(customerResp.error));
+      } else {
+        await markCustomerSent(claimRef, customerResp.data?.id ?? null);
+      }
+    } catch (err) {
+      console.error("[submit-claim] Customer email threw", { claimRef, err });
+      await markCustomerFailed(claimRef, String(err));
+    }
 
     return NextResponse.json({ claim_reference: claimRef });
   } catch (err) {
-    console.error("Submit claim error:", err);
+    console.error("[submit-claim] Unhandled error", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
