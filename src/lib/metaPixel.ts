@@ -15,6 +15,13 @@ declare global {
   }
 }
 
+function newEventId() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 export function initMetaPixel() {
   if (typeof window === "undefined") return;
   if (window.fbq) return;
@@ -36,17 +43,17 @@ export function initMetaPixel() {
   document.head.appendChild(script);
 
   PIXEL_IDS.forEach((id) => window.fbq!("init", id));
-  window.fbq!("track", "PageView");
+  window.fbq!("track", "PageView", {}, { eventID: newEventId() });
 }
 
 export function trackLead() {
   if (typeof window !== "undefined" && window.fbq) {
-    window.fbq("track", "Lead");
+    window.fbq("track", "Lead", {}, { eventID: newEventId() });
   }
 }
 
 export function trackCompleteRegistration() {
   if (typeof window !== "undefined" && window.fbq) {
-    window.fbq("track", "CompleteRegistration");
+    window.fbq("track", "CompleteRegistration", {}, { eventID: newEventId() });
   }
 }
