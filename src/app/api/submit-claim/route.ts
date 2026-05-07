@@ -4,6 +4,7 @@ import { checkEligibility } from "@/lib/eligibility";
 import { airlineNames, getAirlineFromFlightNumber } from "@/data/airlines";
 import { getAirportByCode } from "@/data/airports";
 import { getDb } from "@/lib/db";
+import { getPostHogClient } from "@/lib/posthog-server";
 
 const VALID_EVENT_TYPES = ["delayed", "cancelled", "denied", "unsure"];
 const VALID_DELAY_DURATIONS = ["less-than-3", "3-or-more", "unsure", ""];
@@ -338,6 +339,9 @@ function buildCustomerHtml(claimRef: string, data: ValidatedData, eligibility: E
 }
 
 export async function POST(request: NextRequest) {
+  const distinctId = request.headers.get("X-POSTHOG-DISTINCT-ID") ?? undefined;
+  const sessionId = request.headers.get("X-POSTHOG-SESSION-ID") ?? undefined;
+
   try {
     const body = await request.json();
     const result = validatePayload(body);
@@ -411,6 +415,31 @@ export async function POST(request: NextRequest) {
       console.error("[submit-claim] Customer email threw", { claimRef, err });
       await markCustomerFailed(claimRef, String(err));
     }
+
+    const posthog = getPostHogClient();
+    posthog.capture({
+      distinctId: distinctId ?? data.email,
+      event: "claim_api_processed",
+      properties: {
+        claim_reference: claimRef,
+        eligible: eligibility.eligible,
+        estimated_compensation_zar: eligibility.estimatedCompensation,
+        passenger_count: data.passenger_count,
+        event_type: data.event_type,
+        departure_airport: data.departure_airport,
+        arrival_airport: data.arrival_airport,
+        airline_code: eligibility.airlineCode,
+        $session_id: sessionId,
+      },
+    });
+    posthog.identify({
+      distinctId: distinctId ?? data.email,
+      properties: {
+        email: data.email,
+        name: data.full_name,
+      },
+    });
+    await posthog.flush();
 
     return NextResponse.json({ claim_reference: claimRef });
   } catch (err) {

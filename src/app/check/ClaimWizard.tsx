@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Plane } from "lucide-react";
+import posthog from "posthog-js";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import StepFlightDetails from "@/components/claim/StepFlightDetails";
@@ -116,7 +117,16 @@ export default function ClaimWizard() {
             <StepFlightDetails
               data={data}
               updateData={updateData}
-              onNext={() => setStep(1)}
+              onNext={() => {
+                posthog.capture("flight_details_completed", {
+                  departure_airport: data.departureAirport,
+                  arrival_airport: data.arrivalAirport,
+                  airline: data.airline,
+                  event_type: data.eventType,
+                  delay_duration: data.delayDuration || null,
+                });
+                setStep(1);
+              }}
             />
           )}
           {step === 1 && (
@@ -129,7 +139,10 @@ export default function ClaimWizard() {
             <StepPersonalDetails
               data={data}
               updateData={updateData}
-              onNext={() => setStep(3)}
+              onNext={() => {
+                posthog.capture("personal_details_completed");
+                setStep(3);
+              }}
             />
           )}
           {step === 3 && (

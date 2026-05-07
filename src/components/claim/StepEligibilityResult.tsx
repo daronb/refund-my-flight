@@ -4,6 +4,7 @@ import { CheckCircle, XCircle, HelpCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { checkEligibility, type EligibilityInput } from "@/lib/eligibility";
+import posthog from "posthog-js";
 
 interface Props {
   input: EligibilityInput;
@@ -12,6 +13,14 @@ interface Props {
 
 export default function StepEligibilityResult({ input, onNext }: Props) {
   const result = checkEligibility(input);
+
+  const handleContinue = (eligibilityStatus: "eligible" | "uncertain" | "not_eligible") => {
+    posthog.capture("eligibility_continued", {
+      eligibility_status: eligibilityStatus,
+      estimated_compensation_zar: result.estimatedCompensation?.zar ?? null,
+    });
+    onNext();
+  };
 
   if (result.eligible && result.uncertain) {
     return (
@@ -31,7 +40,7 @@ export default function StepEligibilityResult({ input, onNext }: Props) {
             Many claims that start as &ldquo;not sure&rdquo; end up being successful. There&apos;s no cost to you if it doesn&apos;t work out.
           </p>
           <Button
-            onClick={onNext}
+            onClick={() => handleContinue("uncertain")}
             className="w-full h-12 bg-accent text-accent-foreground font-bold text-base hover:bg-accent/90"
           >
             Submit My Claim & See What Happens →
@@ -61,7 +70,7 @@ export default function StepEligibilityResult({ input, onNext }: Props) {
             No win, no fee — you pay nothing if we don&apos;t succeed.
           </p>
           <Button
-            onClick={onNext}
+            onClick={() => handleContinue("eligible")}
             className="w-full h-12 bg-accent text-accent-foreground font-bold text-base hover:bg-accent/90"
           >
             Continue to Claim →
@@ -92,7 +101,7 @@ export default function StepEligibilityResult({ input, onNext }: Props) {
           Not sure? You can still submit your details and we&apos;ll review your case manually — at no cost to you.
         </p>
         <Button
-          onClick={onNext}
+          onClick={() => handleContinue("not_eligible")}
           variant="outline"
           className="w-full h-12 font-bold text-base"
         >

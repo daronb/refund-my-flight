@@ -12,6 +12,7 @@ import { allAirports } from "@/data/airports";
 import { airlineNames, getAirlineFromFlightNumber } from "@/data/airlines";
 import { getUtmParams } from "@/lib/tracking";
 import { trackCompleteRegistration } from "@/lib/metaPixel";
+import posthog from "posthog-js";
 
 interface Props {
   data: ClaimData;
@@ -43,10 +44,16 @@ export default function StepAuthorise({ data, updateData, onSubmitted }: Props) 
     setSubmitting(true);
     try {
       const utm = getUtmParams();
+      const distinctId = posthog.get_distinct_id();
+      const sessionId = posthog.get_session_id();
 
       const response = await fetch("/api/submit-claim", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-POSTHOG-DISTINCT-ID": distinctId ?? "",
+          "X-POSTHOG-SESSION-ID": sessionId ?? "",
+        },
         body: JSON.stringify({
           flight_number: data.flightNumber,
           flight_date: data.flightDate ? format(data.flightDate, "yyyy-MM-dd") : "",
@@ -68,6 +75,10 @@ export default function StepAuthorise({ data, updateData, onSubmitted }: Props) 
       const responseData = await response.json();
 
       if (!response.ok) {
+        posthog.capture("claim_submission_failed", {
+          error: responseData.error ?? "unknown",
+          status_code: response.status,
+        });
         toast({
           title: "Submission failed",
           description: responseData.error || "Something unexpected happened. Please try again.",
@@ -79,14 +90,29 @@ export default function StepAuthorise({ data, updateData, onSubmitted }: Props) 
 
       const claimRef = responseData.claim_reference;
       if (!claimRef) {
+        posthog.capture("claim_submission_failed", { error: "missing_claim_reference" });
         toast({ title: "Something went wrong", description: "Please try again.", variant: "destructive" });
         setSubmitting(false);
         return;
       }
 
+      const email = data.email.trim().toLowerCase();
+      posthog.identify(email, {
+        email,
+        name: data.fullName.trim(),
+      });
+      posthog.capture("claim_submitted", {
+        claim_reference: claimRef,
+        passenger_count: data.passengerCount,
+        event_type: data.eventType,
+        departure_airport: data.departureAirport,
+        arrival_airport: data.arrivalAirport,
+      });
+
       trackCompleteRegistration();
       onSubmitted(claimRef);
     } catch {
+      posthog.capture("claim_submission_failed", { error: "network_error" });
       toast({ title: "Something went wrong", description: "Please try again.", variant: "destructive" });
       setSubmitting(false);
     }
