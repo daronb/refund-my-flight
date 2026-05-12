@@ -79,7 +79,7 @@ export default function AirlineSearch({
   }, []);
 
   const showDropdown = focused && !freeTextMode && query.trim().length > 0;
-  const errorClass = error ? "border-destructive ring-1 ring-destructive" : "";
+  const errorClass = error ? "border-red-500 ring-2 ring-red-500" : "";
 
   if (freeTextMode) {
     return (

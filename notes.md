@@ -4,6 +4,45 @@ A running log of changes shipped, so we can trace back if something breaks.
 
 ---
 
+## 2026-05-12 (later) — Fix invisible red validation + verification
+
+### Production verification (via a browser sub-agent)
+
+Drove the live site at https://refundmyflight.co.za. Findings:
+
+**✅ Works:**
+- Departure airport freetext fallback ("Can't find your airport? Type it manually") shows correctly, switches input to plain text mode, helper text appears.
+- Eligibility step correctly shows the "Let's Find Out Together" (uncertain / manual review) page when freetext airports are used — NOT a false "not eligible".
+- End-to-end submission with freetext route went through: `Antananarivo, Madagascar → LHR` on a custom airline produced claim ref `RMF-2026-31780`. Freetext value persisted into the review summary.
+
+**❌ BUG found & fixed in this commit:**
+- Red field validation was **not visible**. Clicking "Check Eligibility →" with empty fields did nothing user-visible: button responded but no red borders appeared. The form silently failed to advance. Confirmed by browser agent in real DOM inspection.
+
+**🤷 Minor flaky behaviour (left unfixed for now):**
+- The "Type it manually" link on the airline search occasionally failed to switch to freetext mode on the first click. Browser agent flagged it as possibly a CDP-injection artefact rather than a real-user bug (their submit click also needed JS-eval fallback). Worth watching real session recordings before chasing it.
+
+### Root cause of the red-border bug
+
+`Input.tsx`'s base className uses `border-input` (a custom theme token). My error classes used `border-destructive` + `ring-destructive` (also theme tokens). `cn` uses `twMerge`, but `twMerge` only knows about Tailwind's built-in class groups — it doesn't recognise custom theme tokens as conflicting. Result: both `border-input` and `border-destructive` ended up in the className, and CSS source order picked the wrong winner.
+
+### Fix
+
+Switched all error-state classes from custom theme tokens to Tailwind built-in red:
+- `border-destructive ring-1 ring-destructive` → `border-red-500 ring-2 ring-red-500`
+- `text-destructive` → `text-red-600 font-medium`
+- Radio-group error wrappers: `border border-destructive` → `border-2 border-red-500`
+
+`border-red-500` is in `twMerge`'s known class groups, so it correctly displaces `border-input`. The ring also bumped from `ring-1` to `ring-2` for better visibility.
+
+Files touched: `AirportSearch.tsx`, `AirlineSearch.tsx`, `StepFlightDetails.tsx`, `StepPersonalDetails.tsx`.
+
+### Other items from this round
+
+- **PageSpeed Insights run** — Could not fetch. Google's keyless PSI API quota is exhausted for our egress IP (consumer 583797351490, limit 0). To re-run we either need a free Google Cloud API key (no billing required, just enable PageSpeed Insights API at https://console.cloud.google.com/apis/credentials) or run it manually via https://pagespeed.web.dev/analysis?url=https://refundmyflight.co.za.
+- **Happy-path browser test** — Could not run. The browser-automation tool wasn't installed on this machine; the agent fell back to static-bundle inspection. After this fix lands, worth running the happy path once manually (LHR → FRA, BA, 3+ hour delay should return ELIGIBLE).
+
+---
+
 ## 2026-05-12 — Error tracking, form UX, /check load speed
 
 ### Commit `15975f9` — Unmask third-party script errors and add global error boundary

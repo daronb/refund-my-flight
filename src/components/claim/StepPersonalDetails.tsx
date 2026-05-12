@@ -37,7 +37,7 @@ export default function StepPersonalDetails({ data, updateData, onNext }: Props)
   const missing = attempted ? getMissingFields() : [];
   const hasError = (f: FieldKey) => missing.includes(f);
   const errorClass = (f: FieldKey) =>
-    hasError(f) ? "border-destructive ring-1 ring-destructive" : "";
+    hasError(f) ? "border-red-500 ring-2 ring-red-500" : "";
 
   const handleSubmit = () => {
     const missingNow = getMissingFields();
@@ -139,7 +139,7 @@ export default function StepPersonalDetails({ data, updateData, onNext }: Props)
         </div>
 
         {attempted && missing.length > 0 && (
-          <p className="text-sm text-destructive">
+          <p className="text-sm font-medium text-red-600">
             Please complete the highlighted {missing.length === 1 ? "field" : "fields"} above.
           </p>
         )}

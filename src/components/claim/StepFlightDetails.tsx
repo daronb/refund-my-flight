@@ -182,7 +182,7 @@ export default function StepFlightDetails({ data, updateData, onNext }: Props) {
                 className={cn(
                   "w-full justify-start text-left font-normal",
                   !data.flightDate && "text-muted-foreground",
-                  hasError("flightDate") && "border-destructive ring-1 ring-destructive"
+                  hasError("flightDate") && "border-red-500 ring-2 ring-red-500"
                 )}
               >
                 <CalendarIcon className="mr-2 h-4 w-4" />
@@ -213,7 +213,7 @@ export default function StepFlightDetails({ data, updateData, onNext }: Props) {
         <div
           className={cn(
             "space-y-3 rounded-md",
-            hasError("eventType") && "border border-destructive p-3"
+            hasError("eventType") && "border-2 border-red-500 p-3"
           )}
           ref={eventRef}
         >
@@ -252,7 +252,7 @@ export default function StepFlightDetails({ data, updateData, onNext }: Props) {
           <div
             className={cn(
               "space-y-3 rounded-md",
-              hasError("delayDuration") && "border border-destructive p-3"
+              hasError("delayDuration") && "border-2 border-red-500 p-3"
             )}
             ref={delayRef}
           >
@@ -295,7 +295,7 @@ export default function StepFlightDetails({ data, updateData, onNext }: Props) {
         </div>
 
         {attempted && missing.length > 0 && (
-          <p className="text-sm text-destructive">
+          <p className="text-sm font-medium text-red-600">
             Please complete the highlighted {missing.length === 1 ? "field" : "fields"} above.
           </p>
         )}
