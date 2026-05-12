@@ -42,3 +42,10 @@ yarn-error.log*
 next-env.d.ts
 .env*.local
 .env.local
+
+# claude code local config
+.claude/
+
+# verification artefacts (browser-agent screenshots, ad-hoc reports)
+/step*.png
+/posthog-setup-report.md
