@@ -3,7 +3,6 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { initMetaPixel } from "@/lib/metaPixel";
 
 const CONSENT_KEY = "cookie_consent";
 
@@ -11,22 +10,13 @@ export default function CookieConsent() {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    const consent = localStorage.getItem(CONSENT_KEY);
-    if (consent === "accepted") {
-      initMetaPixel();
-    } else if (!consent) {
+    if (!localStorage.getItem(CONSENT_KEY)) {
       setVisible(true);
     }
   }, []);
 
-  const accept = () => {
-    localStorage.setItem(CONSENT_KEY, "accepted");
-    setVisible(false);
-    initMetaPixel();
-  };
-
-  const decline = () => {
-    localStorage.setItem(CONSENT_KEY, "declined");
+  const dismiss = (choice: "accepted" | "declined") => {
+    localStorage.setItem(CONSENT_KEY, choice);
     setVisible(false);
   };
 
@@ -40,10 +30,10 @@ export default function CookieConsent() {
           <Link href="/privacy" className="underline text-foreground hover:text-secondary">Privacy Policy</Link>.
         </p>
         <div className="flex gap-2 shrink-0">
-          <Button variant="outline" size="sm" onClick={decline}>
+          <Button variant="outline" size="sm" onClick={() => dismiss("declined")}>
             Decline
           </Button>
-          <Button size="sm" className="bg-accent text-accent-foreground hover:bg-accent/90" onClick={accept}>
+          <Button size="sm" className="bg-accent text-accent-foreground hover:bg-accent/90" onClick={() => dismiss("accepted")}>
             Accept
           </Button>
         </div>

@@ -4,6 +4,41 @@ A running log of changes shipped, so we can trace back if something breaks.
 
 ---
 
+## 2026-05-12 (even later) — Drop gtag, fire Meta Pixel unconditionally
+
+### PageSpeed re-test results
+
+After the previous perf commit (deferred PostHog + browserslist + preconnect):
+
+| Metric | Before | After | Δ |
+|---|---|---|---|
+| Performance | 62 | 67 | +5 |
+| **TBT** | 1,670ms | **390ms** | **-1,280ms ✅** |
+| FCP | 1.7s | 2.5s | +800ms ❌ |
+| LCP | 3.1s | 4.9s | +1.8s ❌ |
+| Speed Index | 4.9s | 4.5s | -400ms ✅ |
+| CLS | 0 | 0 | — |
+
+TBT improvement was huge (deferred PostHog working). LCP/FCP regression most likely PSI single-run variance — would need 3-5 runs to confirm. Did not act on it.
+
+### Changes in this commit
+
+1. **Removed Google Tag Manager / gtag entirely** — user confirmed they don't use it.
+   - Deleted both `<Script>` tags from `src/app/layout.tsx` (the gtag.js loader and the inline `gtag('config', ...)` snippet).
+   - Removed the preconnect to `googletagmanager.com`.
+   - Removed `next/script` import that's no longer used.
+
+2. **Meta Pixel now fires unconditionally** — user wants pixel data regardless of cookie banner choice.
+   - Moved `initMetaPixel()` call from `CookieConsent.tsx` into `instrumentation-client.ts` (alongside PostHog init, deferred to `requestIdleCallback`).
+   - `CookieConsent` banner kept as-is for legal/UX disclosure but no longer gates Meta Pixel. The accept/decline buttons now only set localStorage so the banner stops showing — they don't control any tracking.
+   - Pixel still loads with `crossOrigin="anonymous"` and benefits from the preconnect to `connect.facebook.net`.
+
+### Notes
+- POPIA/GDPR-wise, firing Meta Pixel without consent is a customer call. User has confirmed.
+- The `cookie_consent` localStorage key is still set on banner dismiss, so the banner won't reappear. If you want to drop the banner entirely later, it's a one-file change.
+
+---
+
 ## 2026-05-12 (later still) — Performance optimisations from PageSpeed results
 
 ### PageSpeed baseline (before this commit)

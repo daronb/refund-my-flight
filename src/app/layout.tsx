@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
-import Script from "next/script";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
@@ -39,29 +38,11 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${geistSans.variable}`}>
       <head>
-        <link rel="preconnect" href="https://www.googletagmanager.com" crossOrigin="anonymous" />
         <link rel="preconnect" href="https://connect.facebook.net" crossOrigin="anonymous" />
         <link rel="dns-prefetch" href="https://www.facebook.com" />
       </head>
       <body className="min-h-screen bg-background text-foreground font-sans antialiased">
         {children}
-        <Script
-          src="https://www.googletagmanager.com/gtag/js?id=AW-11384511509"
-          strategy="afterInteractive"
-          crossOrigin="anonymous"
-        />
-        <Script
-          id="gtag-init"
-          strategy="afterInteractive"
-          dangerouslySetInnerHTML={{
-            __html: `
-              window.dataLayer = window.dataLayer || [];
-              function gtag(){dataLayer.push(arguments);}
-              gtag('js', new Date());
-              gtag('config', 'AW-11384511509');
-            `,
-          }}
-        />
         <Analytics />
         <SpeedInsights />
       </body>

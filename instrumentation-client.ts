@@ -1,4 +1,5 @@
 import posthog from "posthog-js";
+import { initMetaPixel } from "@/lib/metaPixel";
 
 const init = () => {
   posthog.init(process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN!, {
@@ -8,6 +9,7 @@ const init = () => {
     capture_exceptions: true,
     debug: process.env.NODE_ENV === "development",
   });
+  initMetaPixel();
 };
 
 if (typeof window !== "undefined") {
