@@ -3,6 +3,7 @@
 import { useState, useRef } from "react";
 import { format, subYears } from "date-fns";
 import { CalendarIcon } from "lucide-react";
+import posthog from "posthog-js";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -21,9 +22,20 @@ interface Props {
   onNext: () => void;
 }
 
+type FieldKey =
+  | "departureAirport"
+  | "arrivalAirport"
+  | "airline"
+  | "flightDate"
+  | "eventType"
+  | "delayDuration"
+  | "flightNumber";
+
 export default function StepFlightDetails({ data, updateData, onNext }: Props) {
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [attempted, setAttempted] = useState(false);
 
+  const departureRef = useRef<HTMLDivElement>(null);
   const arrivalRef = useRef<HTMLDivElement>(null);
   const airlineRef = useRef<HTMLDivElement>(null);
   const dateRef = useRef<HTMLButtonElement>(null);
@@ -31,13 +43,60 @@ export default function StepFlightDetails({ data, updateData, onNext }: Props) {
   const flightNumRef = useRef<HTMLInputElement>(null);
   const delayRef = useRef<HTMLDivElement>(null);
 
-  const canProceed =
-    data.flightDate &&
-    data.departureAirport &&
-    data.arrivalAirport &&
-    data.airline &&
-    data.eventType &&
-    (data.eventType !== "delayed" || data.delayDuration);
+  const getMissingFields = (): FieldKey[] => {
+    const missing: FieldKey[] = [];
+    if (!data.departureAirport.trim()) missing.push("departureAirport");
+    if (!data.arrivalAirport.trim()) missing.push("arrivalAirport");
+    if (!data.airline.trim()) missing.push("airline");
+    if (!data.flightDate) missing.push("flightDate");
+    if (!data.eventType) missing.push("eventType");
+    if (data.eventType === "delayed" && !data.delayDuration) missing.push("delayDuration");
+    return missing;
+  };
+
+  const missing = attempted ? getMissingFields() : [];
+  const hasError = (f: FieldKey) => missing.includes(f);
+
+  const scrollToFirstError = (fields: FieldKey[]) => {
+    const first = fields[0];
+    const refMap: Record<FieldKey, React.RefObject<HTMLElement | null>> = {
+      departureAirport: departureRef,
+      arrivalAirport: arrivalRef,
+      airline: airlineRef,
+      flightDate: dateRef,
+      eventType: eventRef,
+      delayDuration: delayRef,
+      flightNumber: { current: flightNumRef.current },
+    };
+    const target = refMap[first]?.current;
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  };
+
+  const handleSubmit = () => {
+    const missingNow = getMissingFields();
+    setAttempted(true);
+    if (missingNow.length > 0) {
+      posthog.capture("flight_details_submit_blocked", {
+        missing_fields: missingNow,
+        missing_count: missingNow.length,
+      });
+      setTimeout(() => scrollToFirstError(missingNow), 50);
+      return;
+    }
+    posthog.capture("flight_details_completed", {
+      departure_airport: data.departureAirport,
+      arrival_airport: data.arrivalAirport,
+      departure_custom: data.departureAirportCustom,
+      arrival_custom: data.arrivalAirportCustom,
+      airline: data.airline,
+      airline_custom: data.airlineCustom,
+      event_type: data.eventType,
+      delay_duration: data.delayDuration || null,
+    });
+    onNext();
+  };
 
   return (
     <Card className="border-0 shadow-md">
@@ -45,16 +104,24 @@ export default function StepFlightDetails({ data, updateData, onNext }: Props) {
         <CardTitle className="text-2xl">Flight Details</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
-        <div className="space-y-2">
+        <div className="space-y-2" ref={departureRef}>
           <Label>Departure Airport</Label>
           <AirportSearch
+            fieldName="departure"
             value={data.departureAirport}
-            onChange={(code) => {
-              updateData({ departureAirport: code });
-              setTimeout(() => {
-                const input = arrivalRef.current?.querySelector("input");
-                input?.focus();
-              }, 50);
+            isCustom={data.departureAirportCustom}
+            error={hasError("departureAirport")}
+            onChange={(code, isCustom) => {
+              updateData({
+                departureAirport: code,
+                departureAirportCustom: !!isCustom,
+              });
+              if (!isCustom && code) {
+                setTimeout(() => {
+                  const input = arrivalRef.current?.querySelector("input");
+                  input?.focus();
+                }, 50);
+              }
             }}
           />
         </div>
@@ -62,13 +129,21 @@ export default function StepFlightDetails({ data, updateData, onNext }: Props) {
         <div className="space-y-2" ref={arrivalRef}>
           <Label>Arrival Airport</Label>
           <AirportSearch
+            fieldName="arrival"
             value={data.arrivalAirport}
-            onChange={(code) => {
-              updateData({ arrivalAirport: code });
-              setTimeout(() => {
-                const input = airlineRef.current?.querySelector("input");
-                input?.focus();
-              }, 50);
+            isCustom={data.arrivalAirportCustom}
+            error={hasError("arrivalAirport")}
+            onChange={(code, isCustom) => {
+              updateData({
+                arrivalAirport: code,
+                arrivalAirportCustom: !!isCustom,
+              });
+              if (!isCustom && code) {
+                setTimeout(() => {
+                  const input = airlineRef.current?.querySelector("input");
+                  input?.focus();
+                }, 50);
+              }
             }}
           />
         </div>
@@ -77,17 +152,22 @@ export default function StepFlightDetails({ data, updateData, onNext }: Props) {
           <Label>Airline</Label>
           <AirlineSearch
             value={data.airline}
-            onChange={(code) => {
+            isCustom={data.airlineCustom}
+            error={hasError("airline")}
+            onChange={(code, isCustom) => {
               const currentFn = data.flightNumber.trim();
               const prevCode = data.airline;
-              if (!currentFn || currentFn === prevCode) {
-                updateData({ airline: code, flightNumber: code });
-              } else {
-                updateData({ airline: code });
+              const shouldSyncFlightNum = !isCustom && (!currentFn || currentFn === prevCode);
+              updateData({
+                airline: code,
+                airlineCustom: !!isCustom,
+                ...(shouldSyncFlightNum ? { flightNumber: code } : {}),
+              });
+              if (!isCustom && code) {
+                setTimeout(() => {
+                  dateRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+                }, 50);
               }
-              setTimeout(() => {
-                dateRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-              }, 50);
             }}
           />
         </div>
@@ -101,7 +181,8 @@ export default function StepFlightDetails({ data, updateData, onNext }: Props) {
                 variant="outline"
                 className={cn(
                   "w-full justify-start text-left font-normal",
-                  !data.flightDate && "text-muted-foreground"
+                  !data.flightDate && "text-muted-foreground",
+                  hasError("flightDate") && "border-destructive ring-1 ring-destructive"
                 )}
               >
                 <CalendarIcon className="mr-2 h-4 w-4" />
@@ -129,7 +210,13 @@ export default function StepFlightDetails({ data, updateData, onNext }: Props) {
           </Popover>
         </div>
 
-        <div className="space-y-3" ref={eventRef}>
+        <div
+          className={cn(
+            "space-y-3 rounded-md",
+            hasError("eventType") && "border border-destructive p-3"
+          )}
+          ref={eventRef}
+        >
           <Label>What happened?</Label>
           <RadioGroup
             value={data.eventType}
@@ -162,7 +249,13 @@ export default function StepFlightDetails({ data, updateData, onNext }: Props) {
         </div>
 
         {data.eventType === "delayed" && (
-          <div className="space-y-3" ref={delayRef}>
+          <div
+            className={cn(
+              "space-y-3 rounded-md",
+              hasError("delayDuration") && "border border-destructive p-3"
+            )}
+            ref={delayRef}
+          >
             <Label>How long was the delay at your destination?</Label>
             <RadioGroup
               value={data.delayDuration}
@@ -193,6 +286,7 @@ export default function StepFlightDetails({ data, updateData, onNext }: Props) {
           <Input
             ref={flightNumRef}
             id="flightNumber"
+            className="ph-no-mask"
             placeholder="e.g. BA56"
             value={data.flightNumber}
             onChange={(e) => updateData({ flightNumber: e.target.value.toUpperCase() })}
@@ -200,9 +294,14 @@ export default function StepFlightDetails({ data, updateData, onNext }: Props) {
           />
         </div>
 
+        {attempted && missing.length > 0 && (
+          <p className="text-sm text-destructive">
+            Please complete the highlighted {missing.length === 1 ? "field" : "fields"} above.
+          </p>
+        )}
+
         <Button
-          onClick={onNext}
-          disabled={!canProceed}
+          onClick={handleSubmit}
           className="w-full h-12 bg-accent text-accent-foreground font-bold text-base hover:bg-accent/90"
         >
           Check Eligibility →

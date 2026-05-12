@@ -10,6 +10,9 @@ export interface EligibilityInput {
   airline: string;
   eventType: string;
   delayDuration: string;
+  departureAirportCustom?: boolean;
+  arrivalAirportCustom?: boolean;
+  airlineCustom?: boolean;
 }
 
 export interface EligibilityResult {
@@ -23,6 +26,17 @@ export function checkEligibility(input: EligibilityInput): EligibilityResult {
   const reasons: string[] = [];
   let eligible = true;
   let uncertain = false;
+
+  if (input.departureAirportCustom || input.arrivalAirportCustom || input.airlineCustom) {
+    return {
+      eligible: true,
+      uncertain: true,
+      reasons: [
+        "We couldn't recognise one of the airports or airline you entered, so our team will review your case manually to confirm eligibility.",
+      ],
+      estimatedCompensation: null,
+    };
+  }
 
   const airlineCode = input.airline || null;
   const isEuCarrier = airlineCode ? euAirlineCodes.has(airlineCode) : false;

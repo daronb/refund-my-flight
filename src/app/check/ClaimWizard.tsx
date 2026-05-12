@@ -1,24 +1,37 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Plane } from "lucide-react";
-import posthog from "posthog-js";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import StepFlightDetails from "@/components/claim/StepFlightDetails";
-import StepEligibilityResult from "@/components/claim/StepEligibilityResult";
-import StepPersonalDetails from "@/components/claim/StepPersonalDetails";
-import StepAuthorise from "@/components/claim/StepAuthorise";
 import { Toaster } from "@/components/ui/toaster";
 import type { EligibilityInput } from "@/lib/eligibility";
+
+const StepEligibilityResult = dynamic(
+  () => import("@/components/claim/StepEligibilityResult"),
+  { ssr: false }
+);
+const StepPersonalDetails = dynamic(
+  () => import("@/components/claim/StepPersonalDetails"),
+  { ssr: false }
+);
+const StepAuthorise = dynamic(
+  () => import("@/components/claim/StepAuthorise"),
+  { ssr: false }
+);
 
 export interface ClaimData {
   flightNumber: string;
   flightDate: Date | undefined;
   departureAirport: string;
   arrivalAirport: string;
+  departureAirportCustom: boolean;
+  arrivalAirportCustom: boolean;
   airline: string;
+  airlineCustom: boolean;
   eventType: string;
   delayDuration: string;
   fullName: string;
@@ -36,7 +49,10 @@ const initialData: ClaimData = {
   flightDate: undefined,
   departureAirport: "",
   arrivalAirport: "",
+  departureAirportCustom: false,
+  arrivalAirportCustom: false,
   airline: "",
+  airlineCustom: false,
   eventType: "",
   delayDuration: "",
   fullName: "",
@@ -68,6 +84,9 @@ export default function ClaimWizard() {
     airline: data.airline,
     eventType: data.eventType,
     delayDuration: data.delayDuration,
+    departureAirportCustom: data.departureAirportCustom,
+    arrivalAirportCustom: data.arrivalAirportCustom,
+    airlineCustom: data.airlineCustom,
   };
 
   return (
@@ -117,16 +136,7 @@ export default function ClaimWizard() {
             <StepFlightDetails
               data={data}
               updateData={updateData}
-              onNext={() => {
-                posthog.capture("flight_details_completed", {
-                  departure_airport: data.departureAirport,
-                  arrival_airport: data.arrivalAirport,
-                  airline: data.airline,
-                  event_type: data.eventType,
-                  delay_duration: data.delayDuration || null,
-                });
-                setStep(1);
-              }}
+              onNext={() => setStep(1)}
             />
           )}
           {step === 1 && (
@@ -139,10 +149,7 @@ export default function ClaimWizard() {
             <StepPersonalDetails
               data={data}
               updateData={updateData}
-              onNext={() => {
-                posthog.capture("personal_details_completed");
-                setStep(3);
-              }}
+              onNext={() => setStep(3)}
             />
           )}
           {step === 3 && (

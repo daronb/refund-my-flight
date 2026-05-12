@@ -42,10 +42,31 @@ function validatePayload(body: unknown) {
   sixYearsAgo.setFullYear(sixYearsAgo.getFullYear() - 6);
   if (flightDate < sixYearsAgo) return { valid: false as const, error: "Flight date is too old" };
 
-  const dep = typeof b.departure_airport === "string" ? b.departure_airport.toUpperCase().trim() : "";
-  const arr = typeof b.arrival_airport === "string" ? b.arrival_airport.toUpperCase().trim() : "";
-  if (!isValidAirportCode(dep)) return { valid: false as const, error: "Invalid departure airport code" };
-  if (!isValidAirportCode(arr)) return { valid: false as const, error: "Invalid arrival airport code" };
+  const depCustom = b.departure_airport_custom === true;
+  const arrCustom = b.arrival_airport_custom === true;
+  const airlineCustom = b.airline_custom === true;
+
+  const depRaw = typeof b.departure_airport === "string" ? b.departure_airport.trim() : "";
+  const arrRaw = typeof b.arrival_airport === "string" ? b.arrival_airport.trim() : "";
+
+  if (depCustom) {
+    if (depRaw.length < 2 || depRaw.length > 100)
+      return { valid: false as const, error: "Departure airport must be 2-100 characters" };
+  } else if (!isValidAirportCode(depRaw.toUpperCase())) {
+    return { valid: false as const, error: "Invalid departure airport code" };
+  }
+  if (arrCustom) {
+    if (arrRaw.length < 2 || arrRaw.length > 100)
+      return { valid: false as const, error: "Arrival airport must be 2-100 characters" };
+  } else if (!isValidAirportCode(arrRaw.toUpperCase())) {
+    return { valid: false as const, error: "Invalid arrival airport code" };
+  }
+  const dep = depCustom ? "ZZZ" : depRaw.toUpperCase();
+  const arr = arrCustom ? "ZZZ" : arrRaw.toUpperCase();
+  const depCustomText = depCustom ? sanitize(depRaw).slice(0, 100) : null;
+  const arrCustomText = arrCustom ? sanitize(arrRaw).slice(0, 100) : null;
+  const airlineCustomText =
+    airlineCustom && typeof b.airline === "string" ? sanitize(b.airline).slice(0, 100) : null;
 
   const et = typeof b.event_type === "string" ? b.event_type : "";
   if (!VALID_EVENT_TYPES.includes(et)) return { valid: false as const, error: "Invalid event type" };
@@ -76,6 +97,9 @@ function validatePayload(body: unknown) {
       flight_date: fd,
       departure_airport: dep,
       arrival_airport: arr,
+      departure_airport_custom_text: depCustomText,
+      arrival_airport_custom_text: arrCustomText,
+      airline_custom_text: airlineCustomText,
       event_type: et,
       delay_duration: dd || null,
       full_name: name,
@@ -90,7 +114,17 @@ function validatePayload(body: unknown) {
   };
 }
 
-function runEligibilityCheck(data: { flight_number: string; flight_date: string; departure_airport: string; arrival_airport: string; event_type: string; delay_duration: string | null }) {
+function runEligibilityCheck(data: {
+  flight_number: string;
+  flight_date: string;
+  departure_airport: string;
+  arrival_airport: string;
+  departure_airport_custom_text: string | null;
+  arrival_airport_custom_text: string | null;
+  airline_custom_text: string | null;
+  event_type: string;
+  delay_duration: string | null;
+}) {
   const airlineCode = getAirlineFromFlightNumber(data.flight_number);
   const result = checkEligibility({
     flightNumber: data.flight_number,
@@ -100,6 +134,9 @@ function runEligibilityCheck(data: { flight_number: string; flight_date: string;
     airline: airlineCode || "",
     eventType: data.event_type,
     delayDuration: data.delay_duration || "",
+    departureAirportCustom: !!data.departure_airport_custom_text,
+    arrivalAirportCustom: !!data.arrival_airport_custom_text,
+    airlineCustom: !!data.airline_custom_text,
   });
   return {
     eligible: result.eligible && !result.uncertain,

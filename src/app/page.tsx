@@ -8,10 +8,12 @@ import FinalCTA from "@/components/landing/FinalCTA";
 import Footer from "@/components/landing/Footer";
 import StickyCTA from "@/components/landing/StickyCTA";
 import CookieConsent from "@/components/CookieConsent";
+import PrefetchCheck from "@/components/landing/PrefetchCheck";
 
 export default function Home() {
   return (
     <main>
+      <PrefetchCheck />
       <Hero />
       <HowItWorks />
       <Eligibility />
