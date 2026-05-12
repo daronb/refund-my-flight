@@ -39,6 +39,7 @@ export function initMetaPixel() {
 
   const script = document.createElement("script");
   script.async = true;
+  script.crossOrigin = "anonymous";
   script.src = "https://connect.facebook.net/en_US/fbevents.js";
   document.head.appendChild(script);
 

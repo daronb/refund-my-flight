@@ -111,7 +111,8 @@ export default function StepAuthorise({ data, updateData, onSubmitted }: Props) 
 
       trackCompleteRegistration();
       onSubmitted(claimRef);
-    } catch {
+    } catch (err) {
+      posthog.captureException(err, { error_context: "claim_submission_network" });
       posthog.capture("claim_submission_failed", { error: "network_error" });
       toast({ title: "Something went wrong", description: "Please try again.", variant: "destructive" });
       setSubmitting(false);

@@ -43,6 +43,7 @@ export default function RootLayout({
         <Script
           src="https://www.googletagmanager.com/gtag/js?id=AW-11384511509"
           strategy="afterInteractive"
+          crossOrigin="anonymous"
         />
         <Script
           id="gtag-init"
