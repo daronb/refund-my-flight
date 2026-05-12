@@ -4,6 +4,69 @@ A running log of changes shipped, so we can trace back if something breaks.
 
 ---
 
+## 2026-05-12 (later still) — Performance optimisations from PageSpeed results
+
+### PageSpeed baseline (before this commit)
+
+User ran a PSI scan against https://refundmyflight.co.za. Mobile results:
+
+- Performance: **62/100** (orange)
+- FCP: 1.7s ✅, LCP: 3.1s ⚠️, **TBT: 1,670ms ❌**, Speed Index: 4.9s ❌, CLS: 0 ✅, TTFB: 40ms ✅
+- LCP element render delay: **2,830ms** — hero text waits ~3s after resources load before paint, because the main thread is busy executing JS
+- JS execution time: 2.7s on mobile
+- Legacy JavaScript: 44 KiB of polyfills for features supported in all current browsers (Array.prototype.at, flat, flatMap, Object.fromEntries, Object.hasOwn, String trimStart/trimEnd, Math.trunc)
+- Network: no `preconnect` hints
+
+Biggest CPU consumers (mobile):
+- `0tm07csolbb4g.js` 814ms (Next.js chunk)
+- `15pu602vykxvf.js` 663ms (Next.js chunk)
+- `posthog-recorder.js` 378ms (session-replay rrweb)
+- `0r8f8hk-oek70.js` 327ms
+- `gtag/js` 277ms
+- `dead-clicks-autocapture.js` 127ms
+
+Root cause: **PostHog session-replay + autocapture + Google Tag Manager all loading and executing during the critical render path.**
+
+### Changes shipped
+
+1. **Defer PostHog init** (`instrumentation-client.ts`)
+   - Wrap `posthog.init()` in `requestIdleCallback` (with 2.5s timeout fallback) or `window.load` + 500ms setTimeout for browsers without rIC.
+   - Defers ~700-800ms of mobile main-thread work out of the LCP critical path.
+   - PostHog still captures everything — pageviews and events fired before init are queued and flushed on init.
+   - Worst case: PostHog inits ~500ms-1s later than before. We lose accuracy on the *first* pageview timestamp but not on any subsequent events.
+
+2. **Tighten browserslist** (`package.json`)
+   - Added explicit `browserslist` array targeting modern browsers only: Chrome 90+, Edge 90+, Firefox 90+, Safari 14+, iOS Safari 14+, Android 90+.
+   - Drops ~44 KiB of polyfills that Next.js was generating for older browsers.
+   - **Cuts support** for: Chrome <90, Safari <14, iOS <14, IE 11. None of these have meaningful market share in 2026, but if you ever see weirdness from very old devices, this is the lever to revisit.
+
+3. **Preconnect hints** (`src/app/layout.tsx`)
+   - Added `<link rel="preconnect">` for `googletagmanager.com` and `connect.facebook.net` (both `crossOrigin="anonymous"` to match the actual script request mode).
+   - Added `<link rel="dns-prefetch">` for `www.facebook.com` (the actual pixel beacon endpoint — preconnect would be wasted on a single request).
+   - Note: PostHog is already proxied through `/ingest` via Next.js rewrites (see `next.config.ts`), so it's same-origin from the browser's perspective — no preconnect needed.
+
+### Expected effect
+
+Hard to predict without rerunning PSI, but rough estimates:
+- TBT should drop 500-800ms (PostHog deferred)
+- LCP should drop 500ms-1s (less JS competing with paint)
+- Bundle size down ~44 KiB (polyfills dropped)
+- Third-party fetches kick off 100-300ms sooner (preconnect)
+
+Target: get Performance score into the 75-85 range.
+
+### Verification
+
+Run PSI again on https://pagespeed.web.dev/analysis?url=https://refundmyflight.co.za after deploy and update this section with the new numbers.
+
+### Things NOT changed (yet)
+
+- Session recording sample rate — left at default (100% capture). Worth dropping to 25-50% if perf still isn't great after this round. PostHog has `session_recording.sampleRate` config but I didn't change it without confirming the exact option name from the docs.
+- Disabling unused features like surveys or heatmaps — same reason; would need to verify exact option names against your installed posthog-js version (1.372.9).
+- Code-splitting the homepage further — most of the `0tm07csolbb4g.js` chunk is probably Hero/HowItWorks/Eligibility/etc. components. Could lazy-load below-the-fold sections with `next/dynamic` if needed.
+
+---
+
 ## 2026-05-12 (later) — Fix invisible red validation + verification
 
 ### Production verification (via a browser sub-agent)

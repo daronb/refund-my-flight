@@ -38,6 +38,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${geistSans.variable}`}>
+      <head>
+        <link rel="preconnect" href="https://www.googletagmanager.com" crossOrigin="anonymous" />
+        <link rel="preconnect" href="https://connect.facebook.net" crossOrigin="anonymous" />
+        <link rel="dns-prefetch" href="https://www.facebook.com" />
+      </head>
       <body className="min-h-screen bg-background text-foreground font-sans antialiased">
         {children}
         <Script
